@@ -43,10 +43,14 @@ export function deadlineEndExclusive(deadlineDate: string, timeZone = BRAND_TIME
 export type ReviewStatus = 'in_review' | 'changes_requested' | 'approved';
 export type VersionStatus = 'in_review' | 'changes_requested' | 'superseded' | 'approved';
 
+export type ChangeRequestStatus = 'open' | 'fulfilled' | 'expired';
+
 export interface ChangeRequest {
   reason: string;
   deadlineDate: string;
   deadlineAt: string;
+  requestedAt: string;
+  status: ChangeRequestStatus;
 }
 
 export interface ScriptVersion {
@@ -54,7 +58,7 @@ export interface ScriptVersion {
   text: string;
   status: VersionStatus;
   submittedAt: string;
-  changeRequest: ChangeRequest | null;
+  changeRequests: ChangeRequest[];
 }
 
 export interface ScriptReview {
@@ -83,26 +87,45 @@ export class ScriptReviewService {
     this.clock = clock;
   }
 
+  // Pedido com prazo vencido não vale: a versão volta a aguardar a marca e o pedido fica no histórico como expirado.
+  #load(campaignId: string): ScriptReview | undefined {
+    const review = this.#reviews.get(campaignId);
+    const version = review?.versions.at(-1);
+    const request = version?.changeRequests.at(-1);
+    if (review && version && request?.status === 'open' && this.clock() >= Date.parse(request.deadlineAt)) {
+      request.status = 'expired';
+      version.status = 'in_review';
+      review.status = 'in_review';
+    }
+    return review;
+  }
+
   get(campaignId: string): ScriptReview | null {
-    return this.#reviews.get(campaignId) ?? null;
+    return this.#load(campaignId) ?? null;
   }
 
   submit(campaignId: string, { text }: { text?: unknown }): ScriptReview {
     if (typeof text !== 'string' || !text.trim()) throw new ReviewError(400, 'invalid_text', 'O roteiro não pode ficar vazio.');
-    const review: ScriptReview = this.#reviews.get(campaignId) ?? { campaignId, status: 'in_review', versions: [], approvedAt: null };
+    const review: ScriptReview = this.#load(campaignId) ?? { campaignId, status: 'in_review', versions: [], approvedAt: null };
     if (review.status === 'approved') throw new ReviewError(409, 'review_closed', 'A revisão já foi aprovada e está encerrada.');
-    if (review.versions.length && review.versions.at(-1)?.status !== 'changes_requested') {
+    const previousVersion = review.versions.at(-1);
+    if (previousVersion && previousVersion.status !== 'changes_requested') {
+      if (previousVersion.changeRequests.at(-1)?.status === 'expired') {
+        throw new ReviewError(409, 'change_request_expired', 'O prazo do pedido de alteração venceu; a marca precisa pedir de novo ou aprovar.');
+      }
       throw new ReviewError(409, 'resubmission_not_allowed', 'Só é possível reenviar após um pedido de alteração.');
     }
 
-    const previousVersion = review.versions.at(-1);
-    if (previousVersion) previousVersion.status = 'superseded';
+    if (previousVersion) {
+      previousVersion.status = 'superseded';
+      previousVersion.changeRequests.at(-1)!.status = 'fulfilled';
+    }
     const version: ScriptVersion = {
       number: review.versions.length + 1,
       text: text.trim(),
       status: 'in_review',
       submittedAt: new Date(this.clock()).toISOString(),
-      changeRequest: null,
+      changeRequests: [],
     };
     review.versions.push(version);
     review.status = 'in_review';
@@ -111,8 +134,9 @@ export class ScriptReviewService {
   }
 
   requestChanges(campaignId: string, { reason, deadlineDate }: { reason?: unknown; deadlineDate?: unknown }): ScriptReview {
-    const review = this.#reviews.get(campaignId);
-    if (!review || review.status === 'approved') throw new ReviewError(409, 'review_closed', 'Não há revisão aberta para alterar.');
+    const review = this.#load(campaignId);
+    if (!review) throw new ReviewError(404, 'not_found', 'Revisão não encontrada.');
+    if (review.status === 'approved') throw new ReviewError(409, 'review_closed', 'A revisão já foi aprovada e está encerrada.');
     if (typeof reason !== 'string' || !reason.trim()) throw new ReviewError(400, 'invalid_reason', 'Informe o motivo da alteração.');
     if (typeof deadlineDate !== 'string' || !deadlineDate.trim()) throw new ReviewError(400, 'invalid_deadline', 'Informe o prazo da alteração.');
     let deadlineAt: number;
@@ -125,14 +149,21 @@ export class ScriptReviewService {
     const version = review.versions.at(-1);
     if (!version || version.status !== 'in_review') throw new ReviewError(409, 'invalid_state', 'A versão atual não está aguardando revisão.');
     version.status = 'changes_requested';
-    version.changeRequest = { reason: reason.trim(), deadlineDate, deadlineAt: new Date(deadlineAt).toISOString() };
+    version.changeRequests.push({
+      reason: reason.trim(),
+      deadlineDate,
+      deadlineAt: new Date(deadlineAt).toISOString(),
+      requestedAt: new Date(this.clock()).toISOString(),
+      status: 'open',
+    });
     review.status = 'changes_requested';
     return review;
   }
 
   approve(campaignId: string): ScriptReview {
-    const review = this.#reviews.get(campaignId);
-    if (!review || review.status === 'approved') throw new ReviewError(409, 'review_closed', 'Não há revisão aberta para aprovar.');
+    const review = this.#load(campaignId);
+    if (!review) throw new ReviewError(404, 'not_found', 'Revisão não encontrada.');
+    if (review.status === 'approved') throw new ReviewError(409, 'review_closed', 'A revisão já foi aprovada e está encerrada.');
     const version = review.versions.at(-1);
     if (!version || version.status !== 'in_review') throw new ReviewError(409, 'invalid_state', 'A versão atual não está aguardando aprovação.');
     version.status = 'approved';

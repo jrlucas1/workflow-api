@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { ReviewError, ScriptReviewService, type ScriptReview } from './script-review.ts';
+import { ReviewError, ScriptReviewService } from './script-review.ts';
 
 interface ApiError {
   code: string;
@@ -11,60 +11,42 @@ interface ApiResponse<T = unknown> {
   error?: ApiError;
 }
 
-interface HttpResult {
-  status: number;
-  body: ApiResponse;
-}
-
-interface CachedResponse {
-  fingerprint: string;
-  result: HttpResult;
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (value !== null && typeof value === 'object') {
-    const entries = Object.entries(value).sort(([left], [right]) => left.localeCompare(right));
-    return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`).join(',')}}`;
-  }
-  return JSON.stringify(value) ?? 'null';
-}
-
-function snapshot<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
-}
+const MAX_BODY_BYTES = 1_000_000;
 
 export function createApp({ service = new ScriptReviewService() }: { service?: ScriptReviewService } = {}) {
-  const idempotencyCache = new Map<string, CachedResponse>();
-
   return createServer(async (request, response) => {
     const send = (status: number, body: ApiResponse): void => {
       response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
       response.end(JSON.stringify(body));
     };
-    let cacheEntry: { key: string; fingerprint: string } | undefined;
     try {
       const url = new URL(request.url ?? '/', 'http://localhost');
       const match = url.pathname.match(/^\/campaigns\/([^/]+)\/script-review(?:\/(request-changes|approve))?$/);
       if (!match) return send(404, { error: { code: 'not_found', message: 'Rota não encontrada.' } });
-      const campaignId = decodeURIComponent(match[1]);
+      let campaignId: string;
+      try { campaignId = decodeURIComponent(match[1]); } catch {
+        return send(400, { error: { code: 'invalid_campaign_id', message: 'Identificador de campanha inválido.' } });
+      }
       const action = match[2];
       if (request.method === 'GET' && !action) {
         const review = service.get(campaignId);
         return review
-          ? send(200, { data: snapshot(review) })
+          ? send(200, { data: review })
           : send(404, { error: { code: 'not_found', message: 'Revisão não encontrada.' } });
       }
       if (request.method !== 'POST') return send(405, { error: { code: 'method_not_allowed', message: 'Método não permitido.' } });
 
-      const rawKey = request.headers['idempotency-key'];
-      const idempotencyKey = Array.isArray(rawKey) ? rawKey[0] : rawKey;
-      if (idempotencyKey !== undefined && (!idempotencyKey.trim() || idempotencyKey.length > 200)) {
-        return send(400, { error: { code: 'invalid_idempotency_key', message: 'A chave deve ter entre 1 e 200 caracteres.' } });
+      const chunks: Buffer[] = [];
+      let size = 0;
+      for await (const chunk of request) {
+        size += (chunk as Buffer).length;
+        if (size > MAX_BODY_BYTES) {
+          response.setHeader('connection', 'close');
+          return send(413, { error: { code: 'body_too_large', message: 'Corpo da requisição grande demais.' } });
+        }
+        chunks.push(chunk as Buffer);
       }
-
-      let raw = '';
-      for await (const chunk of request) raw += chunk;
+      const raw = Buffer.concat(chunks).toString('utf8');
       let body: unknown;
       try { body = JSON.parse(raw || '{}') as unknown; } catch {
         return send(400, { error: { code: 'invalid_json', message: 'Corpo JSON inválido.' } });
@@ -73,35 +55,15 @@ export function createApp({ service = new ScriptReviewService() }: { service?: S
         return send(400, { error: { code: 'invalid_body', message: 'O corpo deve ser um objeto JSON.' } });
       }
 
-      const fingerprint = canonicalJson(body);
-      if (idempotencyKey) {
-        const cacheKey = `${request.method}:${url.pathname}:${idempotencyKey}`;
-        const cached = idempotencyCache.get(cacheKey);
-        if (cached) {
-          if (cached.fingerprint !== fingerprint) {
-            return send(409, { error: { code: 'idempotency_key_reused', message: 'A chave já foi usada com outro conteúdo.' } });
-          }
-          return send(cached.result.status, snapshot(cached.result.body));
-        }
-        cacheEntry = { key: cacheKey, fingerprint };
+      if (!action) return send(201, { data: service.submit(campaignId, body as { text?: unknown }) });
+      if (action === 'request-changes') {
+        return send(201, { data: service.requestChanges(campaignId, body as { reason?: unknown; deadlineDate?: unknown }) });
       }
-
-      let result: HttpResult;
-      if (!action) {
-        result = { status: 201, body: { data: service.submit(campaignId, body as { text?: unknown }) } };
-      } else if (action === 'request-changes') {
-        result = { status: 201, body: { data: service.requestChanges(campaignId, body as { reason?: unknown; deadlineDate?: unknown }) } };
-      } else {
-        result = { status: 200, body: { data: service.approve(campaignId) as ScriptReview } };
-      }
-      if (cacheEntry) idempotencyCache.set(cacheEntry.key, { fingerprint: cacheEntry.fingerprint, result: snapshot(result) });
-      return send(result.status, result.body);
+      return send(200, { data: service.approve(campaignId) });
     } catch (error) {
-      const result: HttpResult = error instanceof ReviewError
-        ? { status: error.status, body: { error: { code: error.code, message: error.message } } }
-        : { status: 500, body: { error: { code: 'internal_error', message: 'Erro interno.' } } };
-      if (cacheEntry) idempotencyCache.set(cacheEntry.key, { fingerprint: cacheEntry.fingerprint, result });
-      return send(result.status, result.body);
+      return error instanceof ReviewError
+        ? send(error.status, { error: { code: error.code, message: error.message } })
+        : send(500, { error: { code: 'internal_error', message: 'Erro interno.' } });
     }
   });
 }

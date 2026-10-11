@@ -1,0 +1,19 @@
+{
+  "name": "conty-revisao-roteiro",
+  "version": "1.0.0",
+  "private": true,
+  "description": "API TypeScript de revisão de roteiro com prazos em America/Sao_Paulo.",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.ts",
+    "test": "node --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}

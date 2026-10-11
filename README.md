@@ -1,63 +1,24 @@
 # Revisão de roteiro
 
-API HTTP em TypeScript para a marca revisar o roteiro de uma campanha. O criador envia uma versão, a marca pede alteração (com motivo e prazo) ou aprova, e o criador reenvia. Toda versão fica no histórico.
+API em TypeScript para a marca revisar o roteiro de uma campanha. O criador envia uma versão, a marca aprova ou pede alteração com motivo e prazo, e o criador reenvia. Nenhuma versão é apagada.
 
-## Como rodar
+## Rodar
 
-Precisa de Node.js 22.18 ou mais novo, que executa TypeScript direto. A API não tem dependências; `npm install` só serve para o typecheck.
+Node.js 22.18 ou mais novo. Os dados ficam em memória.
 
 ```bash
-npm start       # http://localhost:3000
+npm start   # http://localhost:3000
 npm test
-npm run typecheck
 ```
 
-Os dados ficam em memória e somem quando o processo reinicia.
+## API
 
-## Endpoints
+- `POST /campaigns/:id/script-review` envia ou reenvia o roteiro: `{"text": "..."}`
+- `POST /campaigns/:id/script-review/request-changes` pede alteração: `{"reason": "...", "deadlineDate": "YYYY-MM-DD"}`
+- `POST /campaigns/:id/script-review/approve` aprova
+- `GET /campaigns/:id/script-review` devolve o estado e o histórico
 
-| Método e rota | O que faz |
-| --- | --- |
-| `POST /campaigns/:id/script-review` | Envia a primeira versão ou reenvia após um pedido de alteração |
-| `POST /campaigns/:id/script-review/request-changes` | Marca pede alteração na versão atual |
-| `POST /campaigns/:id/script-review/approve` | Marca aprova a versão atual |
-| `GET /campaigns/:id/script-review` | Estado atual e histórico |
-
-Sucesso responde `{ "data": ... }` com a revisão inteira. Erro responde `{ "error": { "code", "message" } }`.
-
-### Enviar roteiro
-
-```http
-POST /campaigns/campanha-42/script-review
-Content-Type: application/json
-
-{"text":"Abertura, demonstração e chamada para ação"}
-```
-
-`201 Created`
-
-```json
-{
-  "data": {
-    "campaignId": "campanha-42",
-    "status": "in_review",
-    "versions": [
-      {
-        "number": 1,
-        "text": "Abertura, demonstração e chamada para ação",
-        "status": "in_review",
-        "submittedAt": "2026-10-11T12:00:00.000Z",
-        "changeRequests": []
-      }
-    ],
-    "approvedAt": null
-  }
-}
-```
-
-### Pedir alteração
-
-`deadlineDate` é um dia (`YYYY-MM-DD`) no fuso da marca, `America/Sao_Paulo`.
+Toda resposta de sucesso traz a revisão inteira. Depois de um envio e um pedido de alteração:
 
 ```http
 POST /campaigns/campanha-42/script-review/request-changes
@@ -66,66 +27,56 @@ Content-Type: application/json
 {"reason":"Apresente o benefício antes da demonstração","deadlineDate":"2026-10-12"}
 ```
 
-`201 Created`. A revisão e a versão 1 passam a `changes_requested`, e a versão ganha o pedido:
-
 ```json
-"changeRequests": [
-  {
-    "reason": "Apresente o benefício antes da demonstração",
-    "deadlineDate": "2026-10-12",
-    "deadlineAt": "2026-10-13T03:00:00.000Z",
-    "requestedAt": "2026-10-11T12:05:00.000Z",
-    "status": "open"
+{
+  "data": {
+    "campaignId": "campanha-42",
+    "status": "changes_requested",
+    "versions": [
+      {
+        "number": 1,
+        "text": "Abertura, demonstração e chamada para ação",
+        "status": "changes_requested",
+        "submittedAt": "2026-10-11T12:00:00.000Z",
+        "changeRequests": [
+          {
+            "reason": "Apresente o benefício antes da demonstração",
+            "deadlineDate": "2026-10-12",
+            "deadlineAt": "2026-10-13T03:00:00.000Z",
+            "requestedAt": "2026-10-11T12:05:00.000Z",
+            "status": "open"
+          }
+        ]
+      }
+    ],
+    "approvedAt": null
   }
-]
+}
 ```
 
-### Erros
-
-Pedido sem prazo, por exemplo, responde `400`:
+O mesmo pedido sem `deadlineDate` responde `400`:
 
 ```json
 { "error": { "code": "invalid_deadline", "message": "Informe o prazo da alteração." } }
 ```
 
-| Status | `code` | Quando |
-| --- | --- | --- |
-| 400 | `invalid_text`, `invalid_reason`, `invalid_deadline` | Campo vazio, ausente ou data inválida |
-| 400 | `deadline_passed` | O dia do prazo já terminou em São Paulo |
-| 404 | `not_found` | Campanha sem revisão |
-| 409 | `review_closed` | Revisão já aprovada |
-| 409 | `change_request_expired` | Reenvio depois do prazo |
-| 409 | `resubmission_not_allowed`, `invalid_state` | Ação fora de ordem |
+## Regras
 
-## Estados
+- O prazo é um dia em `America/Sao_Paulo` e vale até 23:59:59.999 de lá, mesmo com o UTC já no dia seguinte.
+- Pedido sem motivo, sem prazo ou com prazo já vencido responde `400`.
+- O criador só reenvia dentro do prazo. Depois disso o pedido vira `expired`, a versão volta a `in_review` e a marca aprova ou pede de novo.
+- No reenvio, a versão anterior vira `superseded` e continua no histórico com seus pedidos.
+- `approved` é final: nova versão ou novo pedido responde `409`.
 
-- `in_review` → `changes_requested`: a marca pede alteração.
-- `changes_requested` → `in_review`: o criador reenvia dentro do prazo. A versão anterior vira `superseded` e o pedido vira `fulfilled`.
-- `changes_requested` → `in_review`: o prazo vence sem reenvio. O pedido vira `expired` e a mesma versão volta para a marca, que aprova ou pede de novo com outro prazo.
-- `in_review` → `approved`: final. Depois disso não entra versão nem pedido.
+## O que ficou de fora e o que eu mudaria
 
-## Decisões
-
-- O prazo vale até o início do dia seguinte em São Paulo. 23:59:59.999 de lá ainda está no prazo, mesmo com o UTC já no outro dia.
-- Li "prazo que já passou não vale" nos dois sentidos: a marca não registra pedido com dia já encerrado, e o criador não reenvia depois do prazo.
-- Pedido vencido devolve a decisão à marca. A alternativa era deixar a revisão presa em `changes_requested`. Com mais tempo eu confirmaria isso com produto.
-- A expiração é calculada quando alguém lê ou altera a revisão. Não há job rodando.
-
-## O que ficou de fora
-
-- Banco de dados. Hoje não há conflito entre requisições simultâneas só porque o processo é único; com mais tempo, cada transição seria uma transação.
-- Autenticação e papéis. A API não sabe quem é marca e quem é criador, nem registra quem fez cada ação.
-- Fuso por marca: está fixo em `America/Sao_Paulo`.
-- Aviso para as partes quando um pedido expira.
+- Não tem banco nem autenticação. A API não sabe quem é marca e quem é criador.
+- O fuso é fixo, não é configurável por marca.
+- Devolver a decisão à marca quando o prazo vence foi escolha minha. Eu confirmaria com produto.
+- A expiração só é calculada quando alguém lê ou altera a revisão, e ninguém é avisado.
 
 ## Uso de IA
 
-O Codex (OpenAI) gerou o código, os testes e a primeira versão deste README. O Claude (Anthropic) revisou contra o enunciado e fez estas mudanças:
-
-- removeu um mecanismo de idempotência que o enunciado não pedia;
-- fez o prazo valer também para o reenvio do criador;
-- corrigiu os erros de campanha inexistente e identificador malformado;
-- reescreveu os testes de prazo com instantes UTC fixos;
-- reescreveu este README.
+O Codex (OpenAI) gerou o código, os testes e a primeira versão deste README. O Claude (Anthropic) revisou contra o enunciado, removeu um mecanismo de idempotência que não foi pedido, fez o prazo valer também para o reenvio, corrigiu códigos de erro e reescreveu os testes de prazo e este README.
 
 Eu revisei o código que a IA gerou.

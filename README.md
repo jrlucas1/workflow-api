@@ -4,7 +4,7 @@ API HTTP em TypeScript para revisar roteiros por versões. O fluxo permite envia
 
 ## Requisitos e execução
 
-- Node.js 22.6 ou superior (usa a remoção nativa de tipos do Node; não há etapa de build em runtime)
+- Node.js 22.18 ou superior (usa a remoção nativa de tipos do Node; não há etapa de build em runtime)
 - `npm start` inicia a API em `http://localhost:3000`
 - `npm test` executa os testes com o runner nativo do Node
 - `npm install` e `npm run typecheck` instalam/rodam o verificador estático TypeScript

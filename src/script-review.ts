@@ -88,11 +88,10 @@ export class ScriptReviewService {
   }
 
   // Pedido com prazo vencido não vale: a versão volta a aguardar a marca e o pedido fica no histórico como expirado.
-  #load(campaignId: string): ScriptReview | undefined {
-    const review = this.#reviews.get(campaignId);
-    const version = review?.versions.at(-1);
+  #expireIfOverdue(review: ScriptReview): ScriptReview {
+    const version = review.versions.at(-1);
     const request = version?.changeRequests.at(-1);
-    if (review && version && request?.status === 'open' && this.clock() >= Date.parse(request.deadlineAt)) {
+    if (version && request?.status === 'open' && this.clock() >= Date.parse(request.deadlineAt)) {
       request.status = 'expired';
       version.status = 'in_review';
       review.status = 'in_review';
@@ -100,8 +99,16 @@ export class ScriptReviewService {
     return review;
   }
 
+  // As operações de escrita gravam a expiração antes de validar a transição.
+  #load(campaignId: string): ScriptReview | undefined {
+    const review = this.#reviews.get(campaignId);
+    return review && this.#expireIfOverdue(review);
+  }
+
+  // A leitura calcula a expiração numa cópia e não altera o que está guardado.
   get(campaignId: string): ScriptReview | null {
-    return this.#load(campaignId) ?? null;
+    const review = this.#reviews.get(campaignId);
+    return review ? this.#expireIfOverdue(structuredClone(review)) : null;
   }
 
   submit(campaignId: string, { text }: { text?: unknown }): ScriptReview {

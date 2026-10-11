@@ -60,6 +60,24 @@ test('criador reenvia até o último instante do prazo; no instante seguinte o p
   assert.equal(reopened.versions[1].text, 'Roteiro v2');
 });
 
+test('leitura mostra o pedido expirado sem gravar nada', () => {
+  let now = Date.parse('2026-10-10T12:00:00.000Z');
+  const service = new ScriptReviewService({ clock: () => now });
+  service.submit('leitura', { text: 'Roteiro v1' });
+  service.requestChanges('leitura', { reason: 'Ajustar abertura', deadlineDate: '2026-10-11' });
+
+  now = FIRST_INSTANT_OF_OCT_12;
+  const expired = service.get('leitura')!;
+  assert.equal(expired.status, 'in_review');
+  assert.equal(expired.versions[0].changeRequests[0].status, 'expired');
+
+  // Voltar o relógio só é possível no teste: se a leitura tivesse gravado, o pedido continuaria expirado.
+  now = LAST_INSTANT_OF_OCT_11;
+  const open = service.get('leitura')!;
+  assert.equal(open.status, 'changes_requested');
+  assert.equal(open.versions[0].changeRequests[0].status, 'open');
+});
+
 test('prazo não vale mais no primeiro instante do dia seguinte em São Paulo', () => {
   const service = new ScriptReviewService({ clock: () => FIRST_INSTANT_OF_OCT_12 });
   service.submit('c-2', { text: 'Roteiro v1' });

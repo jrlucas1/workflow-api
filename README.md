@@ -23,6 +23,27 @@ Idempotency-Key: submit-campanha-42-v1
 {"text":"Abertura, demonstração e chamada para ação"}
 ```
 
+Resposta `201 Created`:
+
+```json
+{
+  "data": {
+    "campaignId": "campanha-42",
+    "status": "in_review",
+    "versions": [
+      {
+        "number": 1,
+        "text": "Abertura, demonstração e chamada para ação",
+        "status": "in_review",
+        "submittedAt": "2026-10-11T12:00:00.000Z",
+        "changeRequest": null
+      }
+    ],
+    "approvedAt": null
+  }
+}
+```
+
 `POST /campaigns/:campaignId/script-review/request-changes` pede alteração na versão atual. `deadlineDate` é uma data civil da marca (`YYYY-MM-DD`) em `America/Sao_Paulo`.
 
 ```http
@@ -31,6 +52,31 @@ Content-Type: application/json
 Idempotency-Key: request-changes-campanha-42-v1
 
 {"reason":"Apresente o benefício antes da demonstração","deadlineDate":"2026-10-12"}
+```
+
+Resposta `201 Created`:
+
+```json
+{
+  "data": {
+    "campaignId": "campanha-42",
+    "status": "changes_requested",
+    "versions": [
+      {
+        "number": 1,
+        "text": "Abertura, demonstração e chamada para ação",
+        "status": "changes_requested",
+        "submittedAt": "2026-10-11T12:00:00.000Z",
+        "changeRequest": {
+          "reason": "Apresente o benefício antes da demonstração",
+          "deadlineDate": "2026-10-12",
+          "deadlineAt": "2026-10-13T03:00:00.000Z"
+        }
+      }
+    ],
+    "approvedAt": null
+  }
+}
 ```
 
 `POST /campaigns/:campaignId/script-review/approve` aprova a versão atual. `GET /campaigns/:campaignId/script-review` devolve o estado e o histórico.

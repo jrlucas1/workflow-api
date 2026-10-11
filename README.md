@@ -72,11 +72,16 @@ O mesmo pedido sem `deadlineDate` responde `400`:
 
 - Não tem banco nem autenticação. A API não sabe quem é marca e quem é criador.
 - O fuso é fixo, não é configurável por marca.
-- Devolver a decisão à marca quando o prazo vence foi escolha minha. Eu confirmaria com produto.
+- Devolver a decisão à marca quando o prazo vence foi sugestão da IA. Eu confirmaria com produto.
 - A expiração só é calculada quando alguém lê ou altera a revisão, e ninguém é avisado.
 
 ## Uso de IA
 
 O Codex (OpenAI) gerou o código, os testes e a primeira versão deste README. O Claude (Anthropic) revisou contra o enunciado, removeu um mecanismo de idempotência que não foi pedido, fez o prazo valer também para o reenvio, corrigiu códigos de erro e reescreveu os testes de prazo e este README.
 
-Eu revisei o código que a IA gerou.
+O que eu fiz:
+
+- Não confiei na primeira versão e pedi uma segunda revisão contra o enunciado.
+- Decidi que o prazo tem que ser seguido também no reenvio. A primeira versão aceitava reenvio atrasado.
+- Questionei a remoção da idempotência antes de aceitar.
+- Li o trecho que registra o pedido de alteração e pedi a explicação linha a linha.
